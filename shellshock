@@ -68,6 +68,12 @@
 # v1.11, 2014.09.30 - Better cleanup
 #                   * Using "stty sane" to clean up terminal settings on exit
 #
+# v1.12, 2017.07.21 - Static code analysis
+#                   * Minor changes to appease the code analysis gods
+#
+# v1.13, 2017.09.05 - Fixes for strange terminals
+#                   * Fixed a bug with some strange terminal settings that prevented input
+#
 
 # get uname
 uname=$(uname -s)
@@ -84,7 +90,7 @@ if [[ -z "$(tput sgr0)" ]] || [[ -z "$(tput bold)" ]]; then
 fi
 
 # read a single character
-function readc { IFS= read -r -n1 -s "$@" c; }
+function readc { IFS= read -r -n1 -s c; }
 
 # variable variables :)
 gamepid=""
@@ -103,12 +109,8 @@ function cleanup
 	tput cnorm					# show the cursor
 	stty echo					# show input
 	stty sane					# reset terminal
+	reset 2>/dev/null			# reset some more
 	! $saved_term || tput rmcup	# restore the terminal view
-	case "$uname" in
-		Darwin)
-			reset
-		;;
-	esac
 }
 trap cleanup EXIT
 
@@ -135,7 +137,6 @@ tput civis						# hide the cursor
 
 # game subshell
 (
-	reset 2>/dev/null
 	input=false
 	trap 'input=true' USR1
 	trap 'exit 0' TERM INT HUP
@@ -153,25 +154,28 @@ tput civis						# hide the cursor
 		shift 2
 
 		# running this in a loop with 2>/dev/null to avoid "interrupted system call" messages
-		while { ! builtin echo -n "${posarray[$((y*cols+x))]}$@"; } 2>/dev/null; do testparent; done
+		while { ! builtin echo -n "${posarray[$((y*cols+x))]}$*"; } 2>/dev/null; do testparent; done
 	}
 	function safeecho
 	{
 		# running this in a loop with 2>/dev/null to avoid "interrupted system call" messages
-		while { ! builtin echo -n "${posarray[$((y*cols+x))]}$@"; } 2>/dev/null; do testparent; done
+		while { ! builtin echo -n "${posarray[$((y*cols+x))]}$*"; } 2>/dev/null; do testparent; done
 	}
 	function xyprintf
 	{
-		local x=$1 y=$2
-		shift 2
+		local x=$1 y=$2 fmt=$3
+		shift 3
 
 		# running this in a loop with 2>/dev/null to avoid "interrupted system call" messages
-		while { ! builtin printf "${posarray[$((y*cols+x))]}$@"; } 2>/dev/null; do testparent; done
+		while { ! builtin printf "%s$fmt" "${posarray[$((y*cols+x))]}" "$@"; } 2>/dev/null; do testparent; done
 	}
 	function safeprintf
 	{
+		local fmt=$1
+		shift 1
+
 		# running this in a loop with 2>/dev/null to avoid "interrupted system call" messages
-		while { ! builtin printf "${posarray[$((y*cols+x))]}$@"; } 2>/dev/null; do testparent; done
+		while { ! builtin printf "%s$fmt" "${posarray[$((y*cols+x))]}" "$@"; } 2>/dev/null; do testparent; done
 	}
 
 	# called when the player fires his/her weapons
@@ -262,7 +266,7 @@ ascii_dead_w=36
 ascii_dead_h=8
 ascii_dead=\
 ' ______   _______  _______  ______
-(  __  \ (  ____ \(  ___  )(  __  \
+(  __  \ (  ____ \(  ___  )(  __  \ 
 | (  \  )| (    \/| (   ) || (  \  )
 | |   ) || (__    | (___) || |   ) |
 | |   | ||  __)   |  ___  || |   | |
@@ -481,14 +485,16 @@ EOF
 		Darwin)
 			# this is slow. very slow.
 			function microtime {
-				local time=$(python <<<"import time; print \"%.6f\" % time.time();")
-				echo -n ${time/./}
+				local time
+				time=$(python <<<"import time; print \"%.6f\" % time.time();")
+				echo -n "${time/./}"
 			}
 		;;
 		*)
 			function microtime {
-				local time=$(date +%s%N)
-				echo -n ${time:0:((${#time}-3))}
+				local time
+				time=$(date +%s%N)
+				echo -n "${time:0:((${#time}-3))}"
 			}
 		;;
 	esac
@@ -508,17 +514,18 @@ EOF
 		_pos_rows=$rows
 		posarray=()
 
-		local q=false
-		local e=$(echo -e "\e")
+		local q e pos string x y
+
+		q=false
+		e=$(echo -e "\e")
 		if [[ "$(tput cup 0 0)" = "${e}[1;1H" ]]; then
 			# standard terminal movement commands - quick generation
 			q=true
 		fi
 
-		local string="Building position array for ${cols}x${rows}... "
-		local pos=$(tput cup 0 ${#string})
+		string="Building position array for ${cols}x${rows}... "
+		pos=$(tput cup 0 ${#string})
 
-		local x y
 		safeecho "${color_debug}${home}${string}"
 		for ((x=0; x < cols; x++)); do
 			if sizechanged; then
@@ -575,7 +582,7 @@ EOF
 	# border drawing
 	function border
 	{
-		safeecho $color_border
+		safeecho "$color_border"
 
 		# no printf -v on bash3 :(
 		local line
@@ -611,8 +618,8 @@ EOF
 	{
 		local i=$1
 		dynel_x[i]=${dynel_cx[i]}
-		while ! canmoveright $i;	do (( dynel_cx[i]-- )); done;
-		while ! canmoveleft $i;		do (( dynel_cx[i]++ )); done;
+		while ! canmoveright "$i";	do (( dynel_cx[i]-- )); done;
+		while ! canmoveleft "$i";		do (( dynel_cx[i]++ )); done;
 		(( dynel_cx[i] < dynel_x[i] )) && (( dynel_cx[i]++ ))
 		(( dynel_cx[i] > dynel_x[i] )) && (( dynel_cx[i]-- ))
 		dynel_x[i]=${dynel_cx[i]}
@@ -623,8 +630,8 @@ EOF
 	{
 		local i=$1
 		dynel_y[i]=${dynel_cy[i]}
-		while ! canmoveup $i;		do (( dynel_cy[i]++ )); done;
-		while ! canmovedown $i;		do (( dynel_cy[i]-- )); done;
+		while ! canmoveup "$i";		do (( dynel_cy[i]++ )); done;
+		while ! canmovedown "$i";		do (( dynel_cy[i]-- )); done;
 		(( dynel_cy[i] < dynel_y[i] )) && (( dynel_cy[i]++ ))
 		(( dynel_cy[i] > dynel_y[i] )) && (( dynel_cy[i]-- ))
 		dynel_y[i]=${dynel_cy[i]}
@@ -788,7 +795,7 @@ EOF
 				else
 					value="zero"
 				fi
-				IFS= read -r $timer <<< "$value"
+				IFS= read -r "$timer" <<< "$value"
 			done
 			pause=true
 		fi
@@ -799,12 +806,12 @@ EOF
 			local timer value
 			for timer in "${pausetimers[@]}"; do
 				value=${!timer}
-				if [[ value != "zero" ]]; then
+				if [[ "$value" != "zero" ]]; then
 					(( value += time_now ))
 				else
 					value=0
 				fi
-				IFS= read -r $timer <<< "$value"
+				IFS= read -r "$timer" <<< "$value"
 			done
 			pause=false
 		fi
@@ -959,20 +966,20 @@ EOF
 			# push dynels inwards
 			for i in "${!dynel_alive[@]}"; do
 				${dynel_alive[i]} || continue
-				restrict_xaxis $i
+				restrict_xaxis "$i"
 				if ((i == 0)); then
-					restrict_yaxis $i
+					restrict_yaxis "$i"
 				fi
 			done
 		fi
 		if $redraw; then
 			border
-			safeecho $color_origo
+			safeecho "$color_origo"
 			xyecho $origo_x $origo_y "#"
 		fi
 
 		# fps & counter
-		safeecho $color_debug
+		safeecho "$color_debug"
 		if (( seconds > seconds_last )); then
 			fps=$framecounter
 			framecounter=0
@@ -1076,16 +1083,16 @@ EOF
 		case "$state_current" in
 			title)
 				if $redraw; then
-					safeecho $color_title
+					safeecho "$color_title"
 					catc $ascii_title_w $messageheight <<<"${ascii_title}"
 				fi
 				if $redraw; then
-					safeecho $color_keybindings
+					safeecho "$color_keybindings"
 					catc $ascii_keybindings_w $((messageheight + ascii_title_h + 3)) <<<"${ascii_keybindings}"
 				fi
 				if $redraw || [[ "$blink_pressfire" != "$blink_medium" ]]; then
 					blink_pressfire=$blink_medium
-					$blink_medium && safeecho $color_pressfire_1 || safeecho $color_pressfire_2
+					$blink_medium && safeecho "$color_pressfire_1" || safeecho "$color_pressfire_2"
 					catc $ascii_press_fire_w $((messageheight + ascii_title_h + 1)) <<<"$ascii_press_fire"
 				fi
 
@@ -1094,12 +1101,12 @@ EOF
 			;;
 			dead)
 				if $redraw; then
-					safeecho $color_youaredead
+					safeecho "$color_youaredead"
 					catc 7 $messageheight <<<"YOU ARE"
 					catc $ascii_dead_w $((messageheight + 1)) <<<"${ascii_dead}"
 				fi
 				if $redraw; then
-					safeecho $color_score_result
+					safeecho "$color_score_result"
 					catc $((19+${#score_current})) $((messageheight + ascii_dead_h + 2)) <<<"You scored $score_current points!"
 				fi
 				if $redraw; then
@@ -1108,7 +1115,7 @@ EOF
 					if ((score_current > highscore)); then
 						echo -n "$score_current" >"${HOME}/.shellshock"
 					fi
-					safeecho $color_score_result
+					safeecho "$color_score_result"
 					if ((score_current >= highscore)); then
 						catc 15 $((messageheight + ascii_dead_h + 3)) <<<"NEW HIGH SCORE!"
 					else
@@ -1117,7 +1124,7 @@ EOF
 				fi
 				if $redraw || [[ "$blink_pressq" != "$blink_slow" ]]; then
 					blink_pressq=$blink_slow
-					$blink_slow && safeecho $color_pressq_1 || safeecho $color_pressq_2
+					$blink_slow && safeecho "$color_pressq_1" || safeecho "$color_pressq_2"
 					catc $ascii_press_q_w $((messageheight + ascii_dead_h + 5)) <<<"$ascii_press_q"
 				fi
 
@@ -1149,7 +1156,7 @@ EOF
 						timer_fire=$time_now
 						(( counter_fire++ ))
 					fi
-					safeecho $color_fire
+					safeecho "$color_fire"
 					for (( i=0; i<ff_count_max; i++ )); do
 						if ${ff_alive[i]}; then
 							if
@@ -1223,7 +1230,7 @@ EOF
 								(( rock_total % dynel_ydiv[i] == 0 ))
 							then
 								if ((dynel_hp[i] <= 0)); then
-									if ! deathanimation $i; then
+									if ! deathanimation "$i"; then
 										dynel_alive[i]=false
 										(( --rock_count ))
 										first_dead=${first_dead:-$i}
@@ -1309,7 +1316,7 @@ EOF
 				# blink engines of player ship
 				if ! $pause && ((dynel_hp[0] > 0)) && ! ${dynel_redraw[0]} && [[ "$blink_engines" != "$blink_fast" ]]; then
 					blink_engines=$blink_fast
-					$blink_fast && safeecho $color_engine_1 || safeecho $color_engine_2
+					$blink_fast && safeecho "$color_engine_1" || safeecho "$color_engine_2"
 					xyecho $((origo_x+dynel_cx[0]+3)) $((origo_y+dynel_cy[0]-2)) "@"
 					xyecho $((origo_x+dynel_cx[0]-3)) $((origo_y+dynel_cy[0]-2)) "@"
 				fi
@@ -1322,7 +1329,7 @@ EOF
 
 					dynel_redraw[i]=false
 
-					safeecho ${dynel_color[i]}
+					safeecho "${dynel_color[i]}"
 					while
 						if   (( dynel_x[i] < dynel_cx[i] )); then (( dynel_x[i]++ ))
 						elif (( dynel_x[i] > dynel_cx[i] )); then (( dynel_x[i]-- )); fi
@@ -1343,12 +1350,12 @@ EOF
 				# draw pause anim
 				if $pause_last; then # this uses pause_last to avoid drawing the pause blinker before the frame
 					if $redraw; then
-						safeecho ${color_pauseframe}
+						safeecho "${color_pauseframe}"
 						catc $ascii_pauseframe_w $((messageheight + 4)) <<<"$ascii_pauseframe"
 					fi
 					if $redraw || [[ "$blink_pause" != "$blink_slow" ]]; then
 						blink_pause=$blink_slow
-						$blink_slow && safeecho $color_pause_1 || safeecho $color_pause_2
+						$blink_slow && safeecho "$color_pause_1" || safeecho "$color_pause_2"
 						catc $ascii_pause_w $((messageheight + 6)) <<<"$ascii_pause"
 					fi
 
